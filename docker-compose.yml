@@ -1,0 +1,203 @@
+version: '3.8'
+
+services:
+  # Nodo maestro de PostgreSQL
+  postgres-master:
+    image: postgres:${PG_VERSION}
+    container_name: postgres-master
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres-master-data:/var/lib/postgresql/data
+      - ./config/postgresql.conf.master:/etc/postgresql/postgresql.conf
+      - ./config/pg_hba.conf:/etc/postgresql/pg_hba.conf
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+      - ./scripts/initialize-master.sh:/docker-entrypoint-initdb.d/initialize-master.sh
+    command: postgres -c 'config_file=/etc/postgresql/postgresql.conf'
+    ports:
+      - "5432:5432"
+    networks:
+      - postgres-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Réplica 1
+  postgres-replica1:
+    image: postgres:${PG_VERSION}
+    container_name: postgres-replica1
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      PGDATA: /var/lib/postgresql/data/pgdata
+      PRIMARY_HOST: postgres-master
+      PRIMARY_PORT: ${POSTGRES_PORT:-5432}
+      REPLICATION_USER: ${REPLICATION_USER}
+      REPLICATION_PASSWORD: ${REPLICATION_PASSWORD}
+    volumes:
+      - postgres-replica1-data:/var/lib/postgresql/data
+      - ./config/postgresql.conf.replica:/etc/postgresql/postgresql.conf
+      - ./config/pg_hba.conf:/etc/postgresql/pg_hba.conf
+      - ./scripts/initialize-replica.sh:/docker-entrypoint-initdb.d/initialize-replica.sh
+    command: postgres -c 'config_file=/etc/postgresql/postgresql.conf'
+    ports:
+      - "5433:5432"
+    depends_on:
+      postgres-master:
+        condition: service_healthy
+    networks:
+      - postgres-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Réplica 2
+  postgres-replica2:
+    image: postgres:${PG_VERSION}
+    container_name: postgres-replica2
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      PGDATA: /var/lib/postgresql/data/pgdata
+      PRIMARY_HOST: postgres-master
+      PRIMARY_PORT: ${POSTGRES_PORT:-5432}
+      REPLICATION_USER: ${REPLICATION_USER}
+      REPLICATION_PASSWORD: ${REPLICATION_PASSWORD}
+    volumes:
+      - postgres-replica2-data:/var/lib/postgresql/data
+      - ./config/postgresql.conf.replica:/etc/postgresql/postgresql.conf
+      - ./config/pg_hba.conf:/etc/postgresql/pg_hba.conf
+      - ./scripts/initialize-replica.sh:/docker-entrypoint-initdb.d/initialize-replica.sh
+    command: postgres -c 'config_file=/etc/postgresql/postgresql.conf'
+    ports:
+      - "5434:5432"
+    depends_on:
+      postgres-master:
+        condition: service_healthy
+    networks:
+      - postgres-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Réplica 3 (Añadida dinámicamente)
+  postgres-replica3:
+    image: postgres:${PG_VERSION}
+    container_name: postgres-replica3
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      PGDATA: /var/lib/postgresql/data/pgdata
+      PRIMARY_HOST: postgres-master
+      PRIMARY_PORT: ${POSTGRES_PORT:-5432}
+      REPLICATION_USER: ${REPLICATION_USER}
+      REPLICATION_PASSWORD: ${REPLICATION_PASSWORD}
+      SLOT_NAME: postgres_replica3_slot
+    volumes:
+      - postgres-replica3-data:/var/lib/postgresql/data
+      - ./config/postgresql.conf.replica:/etc/postgresql/postgresql.conf
+      - ./config/pg_hba.conf:/etc/postgresql/pg_hba.conf
+      - ./scripts/initialize-replica.sh:/docker-entrypoint-initdb.d/initialize-replica.sh
+    command: postgres -c 'config_file=/etc/postgresql/postgresql.conf'
+    ports:
+      - "5435:5432"
+    depends_on:
+      postgres-master:
+        condition: service_healthy
+    networks:
+      - postgres-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+
+      # Balanceador de carga pgpool
+  pgpool:
+    image: bitnami/pgpool:latest
+    container_name: pgpool
+    environment:
+      PGPOOL_ADMIN_USERNAME: admin
+      PGPOOL_ADMIN_PASSWORD: admin
+      PGPOOL_POSTGRES_USERNAME: ${POSTGRES_USER}
+      PGPOOL_POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      PGPOOL_SR_CHECK_USER: ${POSTGRES_USER}
+      PGPOOL_SR_CHECK_PASSWORD: ${POSTGRES_PASSWORD}
+      PGPOOL_BACKEND_NODES: 0:postgres-master:5432:1:ALLOW_TO_FAILOVER,1:postgres-replica1:5432:1:ALLOW_TO_FAILOVER,2:postgres-replica2:5432:1:ALLOW_TO_FAILOVER,3:postgres-replica4:5432:1:ALLOW_TO_FAILOVER
+      PGPOOL_ENABLE_LOAD_BALANCING: "yes"
+      PGPOOL_MAX_POOL: 4
+      PGPOOL_HEALTH_CHECK_PERIOD: 10
+      PGPOOL_HEALTH_CHECK_TIMEOUT: 5
+      PGPOOL_HEALTH_CHECK_MAX_RETRIES: 3
+      PGPOOL_HEALTH_CHECK_RETRY_DELAY: 5
+      PGPOOL_FAILOVER_ON_BACKEND_ERROR: "yes"
+      PGPOOL_FAILOVER_COMMAND: "/opt/bitnami/pgpool/failover.sh %d %h %p %D %m %H %M %P %r %R"
+    volumes:
+      - ./scripts/failover.sh:/opt/bitnami/pgpool/failover.sh
+    ports:
+      - "${PGPOOL_PORT:-5421}:5432"
+    depends_on:
+      postgres-master:
+        condition: service_healthy
+      postgres-replica1:
+        condition: service_healthy
+      postgres-replica2:
+        condition: service_healthy
+    networks:
+      - postgres-network
+    
+  # Réplica 4 (Añadida dinámicamente)
+  postgres-replica4:
+    image: postgres:${PG_VERSION}
+    container_name: postgres-replica4
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      PGDATA: /var/lib/postgresql/data/pgdata
+      PRIMARY_HOST: postgres-master
+      PRIMARY_PORT: ${POSTGRES_PORT:-5432}
+      REPLICATION_USER: ${REPLICATION_USER}
+      REPLICATION_PASSWORD: ${REPLICATION_PASSWORD}
+      SLOT_NAME: postgres_replica4_slot
+    volumes:
+      - postgres-replica4-data:/var/lib/postgresql/data
+      - ./config/postgresql.conf.replica:/etc/postgresql/postgresql.conf
+      - ./config/pg_hba.conf:/etc/postgresql/pg_hba.conf
+      - ./scripts/initialize-replica.sh:/docker-entrypoint-initdb.d/initialize-replica.sh
+    command: postgres -c 'config_file=/etc/postgresql/postgresql.conf'
+    ports:
+      - "5436:5432"
+    depends_on:
+      postgres-master:
+        condition: service_healthy
+    networks:
+      - postgres-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+networks:
+  postgres-network:
+    driver: bridge
+
+volumes:
+  postgres-replica4-data:
+  postgres-master-data:
+  postgres-replica1-data:
+  postgres-replica2-data:
+  postgres-replica3-data:

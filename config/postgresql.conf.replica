@@ -1,0 +1,22 @@
+hba_file = '/etc/postgresql/pg_hba.conf'
+# Configuración básica
+listen_addresses = '*'
+port = 5432
+max_connections = 100
+
+# Configuración para réplica
+hot_standby = on
+hot_standby_feedback = on
+max_standby_archive_delay = 30s
+max_standby_streaming_delay = 30s
+
+# Archivo y registro
+logging_collector = on
+log_directory = 'pg_log'
+log_filename = 'postgresql-%Y-%m-%d_%H%M%S.log'
+log_statement = 'mod'
+
+# Configuración de rendimiento
+shared_buffers = 128MB
+work_mem = 4MB
+maintenance_work_mem = 64MB
